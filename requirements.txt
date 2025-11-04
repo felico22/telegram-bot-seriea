@@ -1,5 +1,7 @@
 python-telegram-bot==20.5
-pandas
-requests
-openpyxl
+pandas==2.0.3
+requests==2.31.0
+openpyxl==3.1.2
+
+
 
