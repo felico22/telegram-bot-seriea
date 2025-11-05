@@ -14,4 +14,6 @@ openpyxl>=3.1.2
 # Utilità varie
 python-dotenv>=1.0.0  # per gestire variabili d'ambiente
 
+flask
+
 
