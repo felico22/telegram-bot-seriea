@@ -3,10 +3,14 @@ import requests
 import pandas as pd
 import asyncio
 import os
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, PollAnswerHandler, ContextTypes
-from flask import Flask
-import threading
+from flask import Flask, request
+from telegram import Update, Bot
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    PollAnswerHandler,
+    ContextTypes,
+)
 
 # ---------------- CONFIG ----------------
 BOT_TOKEN = "8338334264:AAHAKlWSfMRl3NNV67onP3-FXbOvFgaXo4Q"
@@ -18,7 +22,11 @@ TEMP_EXCEL_FILE = "serieA_full_data_temp.xlsx"
 # ----------------------------------------
 
 file_lock = asyncio.Lock()
+app = Flask(__name__)
+bot = Bot(token=BOT_TOKEN)
+application = ApplicationBuilder().token(BOT_TOKEN).build()
 
+# ---------------- FUNZIONI PER EXCEL ----------------
 def load_all_data():
     required_cols = ["timestamp", "poll_id", "user_id", "username", "first_name", "last_name", "option_id", "match"]
     dtype_spec = {'poll_id': str, 'user_id': str, 'option_id': str}
@@ -26,14 +34,12 @@ def load_all_data():
         df = pd.read_excel(EXCEL_FILE, sheet_name="Log Completo", dtype=dtype_spec)
         df = df.fillna("")
         if not all(col in df.columns for col in required_cols):
-            print("⚠️ Colonne mancanti nel Log Completo. Reinizializzo il DataFrame.")
             df = pd.DataFrame(columns=required_cols)
         return df
     except FileNotFoundError:
-        print(f"ℹ️ File Excel '{EXCEL_FILE}' non trovato. Creazione nuovo DataFrame.")
         return pd.DataFrame(columns=required_cols)
     except Exception as e:
-        print(f"⚠️ Errore caricamento '{EXCEL_FILE}': {e}")
+        print(f"Errore caricamento '{EXCEL_FILE}': {e}")
         return pd.DataFrame(columns=required_cols)
 
 def create_summary_table(df_log):
@@ -69,24 +75,21 @@ def save_data_to_excel(df_log, df_summary):
         with pd.ExcelWriter(EXCEL_FILE, engine='openpyxl') as writer:
             for sheet_name, df in data_to_write.items():
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
-        print(f"✅ Dati salvati in '{EXCEL_FILE}'.")
         return True
     except PermissionError:
-        print(f"🛑 File aperto: '{EXCEL_FILE}'")
         try:
             with pd.ExcelWriter(TEMP_EXCEL_FILE, engine='openpyxl') as writer:
                 for sheet_name, df in data_to_write.items():
                     df.to_excel(writer, sheet_name=sheet_name, index=False)
             os.replace(TEMP_EXCEL_FILE, EXCEL_FILE)
-            print(f"✅ Dati salvati tramite file temporaneo.")
             return True
         except Exception as e:
             if os.path.exists(TEMP_EXCEL_FILE):
                 os.remove(TEMP_EXCEL_FILE)
-            print(f"🛑 Errore persistente su {EXCEL_FILE}: {e}")
+            print(f"Errore persistente su {EXCEL_FILE}: {e}")
             return False
     except Exception as e:
-        print(f"⚠️ Errore generico salvataggio {EXCEL_FILE}: {e}")
+        print(f"Errore generico salvataggio {EXCEL_FILE}: {e}")
         return False
 
 # ---------------- API Football-Data ----------------
@@ -132,7 +135,7 @@ def get_next_round_matches():
         future_matches_next_md = [m for m in matches_next_md if datetime.datetime.fromisoformat(m["utcDate"].replace("Z","+00:00")) >= now]
         return future_matches_next_md
 
-# ---------------- BOT ----------------
+# ---------------- FUNZIONI BOT ----------------
 async def send_matches_poll(context: ContextTypes.DEFAULT_TYPE):
     matches = await asyncio.to_thread(get_next_round_matches)
     if not matches:
@@ -204,25 +207,19 @@ async def poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await asyncio.to_thread(save_data_to_excel, df_log, df_summary)
         print(f"Voto registrato: {vote_user_id} ha votato {vote_option_id} per {match_name}")
 
-# ---------------- KEEP ALIVE SERVER ----------------
-app_web = Flask(__name__)
+# ---------------- HANDLER ----------------
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("polls", polls_command))
+application.add_handler(PollAnswerHandler(poll_answer))
 
-@app_web.route('/')
-def home():
-    return "✅ Bot attivo su Render!"
+# ---------------- FLASK + WEBHOOK ----------------
+@app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), bot)
+    application.update_queue.put(update)
+    return "ok"
 
-def run_flask():
-    app_web.run(host='0.0.0.0', port=10000)
-
-# ---------------- MAIN ----------------
 if __name__ == "__main__":
-    # Avvia il piccolo server web per Render
-    threading.Thread(target=run_flask).start()
-
-    # Avvia il bot Telegram
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("polls", polls_command))
-    app.add_handler(PollAnswerHandler(poll_answer))
-    print("🚀 Bot Telegram e server Flask avviati!")
-    app.run_polling()
+    # Imposta webhook (una volta sola)
+    bot.set_webhook(f"https://TUO_DOMINIO/render/webhook/{BOT_TOKEN}")
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
