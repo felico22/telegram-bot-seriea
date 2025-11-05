@@ -1,5 +1,17 @@
+# Bot Telegram
 python-telegram-bot==22.5
-pandas
-requests
-openpyxl
+
+# Manipolazione dati
+pandas==2.3.3
+numpy==1.26.2
+
+# Chiamate API HTTP
+requests>=2.31.0
+
+# Excel
+openpyxl>=3.1.2
+
+# Utilità varie
+python-dotenv>=1.0.0  # per gestire variabili d'ambiente
+
 
