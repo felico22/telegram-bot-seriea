@@ -5,6 +5,8 @@ import asyncio
 import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, PollAnswerHandler, ContextTypes
+from flask import Flask
+import threading
 
 # ---------------- CONFIG ----------------
 BOT_TOKEN = "8338334264:AAHAKlWSfMRl3NNV67onP3-FXbOvFgaXo4Q"
@@ -202,11 +204,25 @@ async def poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await asyncio.to_thread(save_data_to_excel, df_log, df_summary)
         print(f"Voto registrato: {vote_user_id} ha votato {vote_option_id} per {match_name}")
 
+# ---------------- KEEP ALIVE SERVER ----------------
+app_web = Flask(__name__)
+
+@app_web.route('/')
+def home():
+    return "✅ Bot attivo su Render!"
+
+def run_flask():
+    app_web.run(host='0.0.0.0', port=10000)
+
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
+    # Avvia il piccolo server web per Render
+    threading.Thread(target=run_flask).start()
+
+    # Avvia il bot Telegram
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("polls", polls_command))
     app.add_handler(PollAnswerHandler(poll_answer))
-    print("Bot avviato!")
+    print("🚀 Bot Telegram e server Flask avviati!")
     app.run_polling()
