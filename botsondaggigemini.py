@@ -7,138 +7,89 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, PollAnswerHandler, ContextTypes
 
 # ---------------- CONFIG ----------------
-BOT_TOKEN = "8338334264:AAHAKlWSfMRl3NNV67onP3-FXbOvFgaXo4Q"
-GROUP_ID = -1003215176643  # chat_id numerico del gruppo
-EXCEL_FILE = "serieA_full_data.xlsx"   # File Excel principale
-TEMP_EXCEL_FILE = "serieA_full_data_temp.xlsx"  # File temporaneo
-API_KEY = "7fc5a86f88214b3098d25d8e4a2ffc5b"
-LEAGUE_CODE = "SA"  # Serie A
+
+BOT_TOKEN = "INSERISCI_IL_TUO_TOKEN"
+GROUP_ID = -1001234567890  # ID del tuo canale/gruppo
+ADMIN_ID = 123456789       # <-- METTI IL TUO USER ID
+
+EXCEL_FILE = "serieA_full_data.xlsx"
+TEMP_EXCEL_FILE = "serieA_full_data_temp.xlsx"
+
+API_KEY = "INSERISCI_API_KEY"
+LEAGUE_CODE = "SA"
+
 # ----------------------------------------
 
 file_lock = asyncio.Lock()
 
-# ---------------- FUNZIONI EXCEL ----------------
+# ---------------- EXCEL ----------------
+
 def load_all_data():
-    required_cols = ["timestamp", "poll_id", "user_id", "username", "first_name", "last_name", "option_id", "match"]
-    dtype_spec = {'poll_id': str, 'user_id': str, 'option_id': str}
+    cols = ["timestamp", "poll_id", "user_id", "username",
+            "first_name", "last_name", "option_id", "match"]
 
     try:
-        df = pd.read_excel(EXCEL_FILE, sheet_name="Log Completo", dtype=dtype_spec)
+        df = pd.read_excel(EXCEL_FILE, sheet_name="Log Completo", dtype=str)
         df = df.fillna("")
-        if not all(col in df.columns for col in required_cols):
-            print("⚠️ Colonne mancanti nel Log Completo. Reinizializzo il DataFrame.")
-            df = pd.DataFrame(columns=required_cols)
         return df
-    except FileNotFoundError:
-        print(f"ℹ️ File '{EXCEL_FILE}' non trovato. Creazione nuovo DataFrame.")
-        return pd.DataFrame(columns=required_cols)
-    except Exception as e:
-        print(f"⚠️ Errore caricamento '{EXCEL_FILE}': {e}")
-        return pd.DataFrame(columns=required_cols)
+    except:
+        return pd.DataFrame(columns=cols)
 
-def create_summary_table(df_log):
-    df_votes = df_log[(df_log['user_id'] != "") & (df_log['option_id'] != "")].copy()
+def create_summary_table(df):
+    df_votes = df[(df['user_id'] != "") & (df['option_id'] != "")]
     if df_votes.empty:
-        return pd.DataFrame(columns=['Partita', 'Utente (Username/ID)', 'Voto (1, X, 2)', 'Orario Voto'])
+        return pd.DataFrame(columns=["Partita", "Utente", "Voto", "Orario"])
 
-    vote_map = {'0': '1', '1': 'X', '2': '2'}
-    df_votes['Voto Testo'] = df_votes['option_id'].astype(str).map(vote_map)
-    df_votes['Username Pulito'] = df_votes['username'].astype(str).str.replace('@', '', regex=False).str.replace('nan', '', regex=False)
-    df_votes['Nome Completo'] = (
-        df_votes['first_name'].astype(str).str.replace('nan', '', regex=False) + ' ' +
-        df_votes['last_name'].astype(str).str.replace('nan', '', regex=False)
-    ).str.strip()
+    map_vote = {"0":"1", "1":"X", "2":"2"}
+    df_votes["Voto"] = df_votes["option_id"].map(map_vote)
+    df_votes["Utente"] = (
+        df_votes["username"].replace("", pd.NA)
+        .fillna(df_votes["first_name"])
+        .fillna("User") + " (" + df_votes["user_id"] + ")"
+    )
 
-    def crea_nome_utente(r):
-        if r['Username Pulito']:
-            return f"{r['Username Pulito']} ({r['user_id']})"
-        if r['Nome Completo']:
-            return f"{r['Nome Completo']} ({r['user_id']})"
-        return f"ID {r['user_id']}"
+    df_votes = df_votes.sort_values("timestamp", ascending=False)
+    df_votes = df_votes.drop_duplicates(subset=["match","user_id"])
 
-    df_votes['Utente (ID)'] = df_votes.apply(crea_nome_utente, axis=1)
-    df_summary = df_votes.sort_values(by=['match', 'timestamp'], ascending=[True, False]).drop_duplicates(subset=['match', 'user_id'], keep='first')
-    df_summary = df_summary[['match', 'Utente (ID)', 'Voto Testo', 'timestamp']]
-    df_summary.columns = ['Partita', 'Utente (Username/ID)', 'Voto (1, X, 2)', 'Orario Voto']
-    return df_summary.sort_values(by=['Partita', 'Utente (Username/ID)'], ascending=True)
+    return df_votes[["match","Utente","Voto","timestamp"]].rename(columns={
+        "match":"Partita",
+        "timestamp":"Orario"
+    })
 
-def save_data_to_excel(df_log, df_summary):
-    data_to_write = {"Log Completo": df_log, "Riepilogo Voti": df_summary}
-    try:
-        with pd.ExcelWriter(EXCEL_FILE, engine='openpyxl') as writer:
-            for sheet_name, df in data_to_write.items():
-                df.to_excel(writer, sheet_name=sheet_name, index=False)
-        print(f"✅ Salvato '{EXCEL_FILE}' con successo.")
-        return True
-    except PermissionError:
-        print(f"🛑 File '{EXCEL_FILE}' aperto, uso file temporaneo...")
-        try:
-            with pd.ExcelWriter(TEMP_EXCEL_FILE, engine='openpyxl') as writer:
-                for sheet_name, df in data_to_write.items():
-                    df.to_excel(writer, sheet_name=sheet_name, index=False)
-            os.replace(TEMP_EXCEL_FILE, EXCEL_FILE)
-            print(f"✅ Dati salvati tramite file temporaneo.")
-            return True
-        except Exception as e:
-            print(f"🛑 Errore salvataggio temporaneo: {e}")
-            return False
-    except Exception as e:
-        print(f"⚠️ Errore salvataggio '{EXCEL_FILE}': {e}")
-        return False
+def save_to_excel(df_log, df_summary):
+    with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl") as writer:
+        df_log.to_excel(writer, sheet_name="Log Completo", index=False)
+        df_summary.to_excel(writer, sheet_name="Riepilogo Voti", index=False)
 
 # ---------------- API FOOTBALL ----------------
-def fetch_matches_from_api(season_year, matchday):
+
+def fetch_matches():
     headers = {"X-Auth-Token": API_KEY}
     url = f"https://api.football-data.org/v4/competitions/{LEAGUE_CODE}/matches"
-    params = {"season": season_year, "matchday": matchday}
     try:
-        resp = requests.get(url, headers=headers, params=params, timeout=10)
-        resp.raise_for_status()
-        return resp.json().get("matches", [])
-    except Exception as e:
-        print(f"Errore API fetch partite: {e}")
+        res = requests.get(url, headers=headers, timeout=10)
+        return res.json().get("matches", [])
+    except:
         return []
 
-def get_next_round_matches():
-    headers = {"X-Auth-Token": API_KEY}
-    url_competition = f"https://api.football-data.org/v4/competitions/{LEAGUE_CODE}"
-    try:
-        resp_comp = requests.get(url_competition, headers=headers, timeout=10)
-        resp_comp.raise_for_status()
-        data_comp = resp_comp.json()
-        current_season = data_comp.get("currentSeason")
-        if not current_season:
-            print("⚠️ currentSeason mancante.")
-            return []
-        season_year = current_season.get("startDate")[:4]
-        current_matchday = current_season.get("currentMatchday")
-        print(f"✅ Stagione {season_year}, Giornata {current_matchday}")
-    except Exception as e:
-        print(f"Errore API competizione: {e}")
-        return []
+# ---------------- ADMIN ----------------
 
-    matches_current_md = fetch_matches_from_api(season_year, current_matchday)
-    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-    future_matches = [m for m in matches_current_md if datetime.datetime.fromisoformat(m["utcDate"].replace("Z", "+00:00")) >= now]
-    if future_matches:
-        print(f"✅ {len(future_matches)} partite future trovate.")
-        return future_matches
-    next_matchday = current_matchday + 1
-    return fetch_matches_from_api(season_year, next_matchday)
+async def send_polls(context):
+    matches = await asyncio.to_thread(fetch_matches)
 
-# ---------------- BOT ----------------
-async def send_matches_poll(context: ContextTypes.DEFAULT_TYPE):
-    matches = await asyncio.to_thread(get_next_round_matches)
-    if not matches:
-        await context.bot.send_message(chat_id=GROUP_ID, text="⚠️ Nessuna partita trovata.")
-        return
+    for m in matches[:10]:
+        home = m["homeTeam"]["name"]
+        away = m["awayTeam"]["name"]
 
-    for match in matches:
-        home = match["homeTeam"]["name"]
-        away = match["awayTeam"]["name"]
-        question = f"{home} vs {away} – pronostico giornata"
-        options = ["1", "X", "2"]
-        poll = await context.bot.send_poll(chat_id=GROUP_ID, question=question, options=options, is_anonymous=False)
+        q = f"{home} vs {away}"
+        opts = ["1", "X", "2"]
+
+        poll = await context.bot.send_poll(
+            chat_id=GROUP_ID,
+            question=q,
+            options=opts,
+            is_anonymous=False
+        )
 
         row = {
             "timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
@@ -148,75 +99,87 @@ async def send_matches_poll(context: ContextTypes.DEFAULT_TYPE):
             "first_name": "",
             "last_name": "",
             "option_id": "",
-            "match": f"{home} vs {away}"
+            "match": q
         }
 
         async with file_lock:
-            df_log = await asyncio.to_thread(load_all_data)
-            df_log = pd.concat([df_log, pd.DataFrame([row])], ignore_index=True)
-            df_summary = await asyncio.to_thread(create_summary_table, df_log)
-            await asyncio.to_thread(save_data_to_excel, df_log, df_summary)
+            df = await asyncio.to_thread(load_all_data)
+            df = pd.concat([df, pd.DataFrame([row])])
+            summary = await asyncio.to_thread(create_summary_table, df)
+            await asyncio.to_thread(save_to_excel, df, summary)
+
+async def polls_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    await send_polls(context)
+
+async def get_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if os.path.exists(EXCEL_FILE):
+        await update.message.reply_document(open(EXCEL_FILE, "rb"))
+
+# ---------------- UTENTI ----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot pronto! Usa /polls per creare i sondaggi e /getexcel per scaricare il file Excel.")
+    uid = update.effective_user.id
+    if uid == ADMIN_ID:
+        await update.message.reply_text("👑 Admin attivo")
+    else:
+        await update.message.reply_text("✅ Puoi votare i sondaggi nel canale.\nUsa /score per vedere il tuo punteggio.")
 
-async def polls_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_matches_poll(context)
-    await update.message.reply_text("✅ Sondaggi inviati!")
+async def score(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = str(update.effective_user.id)
+
+    async with file_lock:
+        df = await asyncio.to_thread(load_all_data)
+
+    votes = df[(df["user_id"] == uid) & (df["option_id"] != "")]
+    total = len(votes)
+
+    await update.message.reply_text(f"📊 Il tuo punteggio:\n✅ Voti validi: {total}")
+
+# ---------------- REGISTRA VOTI ----------------
 
 async def poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pa = update.poll_answer
-    vote_timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    vote_poll_id = str(pa.poll_id)
-    vote_user_id = str(pa.user.id)
-    vote_username = pa.user.username or ""
-    vote_first_name = pa.user.first_name or ""
-    vote_last_name = pa.user.last_name or ""
-    vote_option_id = "|".join(map(str, pa.option_ids))
+
+    poll_id = str(pa.poll_id)
+    uid = str(pa.user.id)
+
+    row = {
+        "timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "poll_id": poll_id,
+        "user_id": uid,
+        "username": pa.user.username or "",
+        "first_name": pa.user.first_name or "",
+        "last_name": pa.user.last_name or "",
+        "option_id": str(pa.option_ids[0]),
+        "match": ""
+    }
 
     async with file_lock:
-        df_log = await asyncio.to_thread(load_all_data)
-        match_row = df_log[(df_log['poll_id'] == vote_poll_id) & (df_log['user_id'] == "")]
+        df = await asyncio.to_thread(load_all_data)
+
+        match_row = df[(df["poll_id"] == poll_id) & (df["user_id"] == "")]
         if match_row.empty:
-            print(f"⚠️ Poll ID sconosciuto: {vote_poll_id}")
             return
-        match_name = match_row['match'].iloc[0]
-        row = {
-            "timestamp": vote_timestamp,
-            "poll_id": vote_poll_id,
-            "user_id": vote_user_id,
-            "username": vote_username,
-            "first_name": vote_first_name,
-            "last_name": vote_last_name,
-            "option_id": vote_option_id,
-            "match": match_name
-        }
-        df_log = pd.concat([df_log, pd.DataFrame([row])], ignore_index=True)
-        df_summary = await asyncio.to_thread(create_summary_table, df_log)
-        await asyncio.to_thread(save_data_to_excel, df_log, df_summary)
-        print(f"✅ Voto salvato: {vote_user_id} → {vote_option_id} ({match_name})")
 
-# ---------------- NUOVO COMANDO /GETEXCEL ----------------
-async def get_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Invia il file Excel all'utente su Telegram."""
-    if not os.path.exists(EXCEL_FILE):
-        await update.message.reply_text("⚠️ Nessun file Excel trovato.")
-        return
-
-    try:
-        await update.message.reply_document(document=open(EXCEL_FILE, "rb"))
-        print(f"📤 File Excel inviato a {update.effective_user.username or update.effective_user.id}")
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ Errore durante l'invio del file: {e}")
-        print(f"🛑 Errore invio Excel: {e}")
+        row["match"] = match_row.iloc[0]["match"]
+        df = pd.concat([df, pd.DataFrame([row])])
+        summary = await asyncio.to_thread(create_summary_table, df)
+        await asyncio.to_thread(save_to_excel, df, summary)
 
 # ---------------- MAIN ----------------
+
 if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("polls", polls_command))
+    app.add_handler(CommandHandler("polls", polls_cmd))
     app.add_handler(CommandHandler("getexcel", get_excel))
+    app.add_handler(CommandHandler("score", score))
     app.add_handler(PollAnswerHandler(poll_answer))
 
-    print("🚀 Bot avviato: pronto a creare sondaggi, registrare voti e inviare Excel.")
+    print("✅ Bot avviato")
     app.run_polling()
